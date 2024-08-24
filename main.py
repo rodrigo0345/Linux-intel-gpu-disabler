@@ -26,9 +26,9 @@ def backup_grub():
         print(f"Failed to backup GRUB file: {e}")
         sys.exit(1)
 
-def update_grub():
+def update_grub_for_blacklisting():
     """Update GRUB configuration to blacklist the Intel GPU driver."""
-    print("Updating GRUB configuration...")
+    print("Updating GRUB configuration to blacklist Intel GPU...")
     grub_file = "/etc/default/grub"
     grub_update_cmd = "grub2-mkconfig -o /boot/grub2/grub.cfg"
     grub_update_uefi_cmd = "grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg"
@@ -44,6 +44,30 @@ def update_grub():
         for line in lines:
             if line.startswith('GRUB_CMDLINE_LINUX'):
                 line = line.rstrip() + ' rd.driver.blacklist=i915 modprobe.blacklist=i915 nvidia-drm.modeset=1\n'
+            file.write(line)
+
+    execute_command(grub_update_cmd)
+    execute_command(grub_update_uefi_cmd)
+    print("GRUB configuration updated. Please reboot for changes to take effect.")
+
+def update_grub_for_enabling():
+    """Update GRUB configuration to remove Intel GPU blacklist."""
+    print("Updating GRUB configuration to enable Intel GPU...")
+    grub_file = "/etc/default/grub"
+    grub_update_cmd = "grub2-mkconfig -o /boot/grub2/grub.cfg"
+    grub_update_uefi_cmd = "grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg"
+
+    # Backup GRUB before making changes
+    backup_grub()
+
+    # Update GRUB configuration
+    with open(grub_file, 'r') as file:
+        lines = file.readlines()
+
+    with open(grub_file, 'w') as file:
+        for line in lines:
+            if line.startswith('GRUB_CMDLINE_LINUX'):
+                line = line.rstrip().replace('rd.driver.blacklist=i915 modprobe.blacklist=i915 nvidia-drm.modeset=1', '')
             file.write(line)
 
     execute_command(grub_update_cmd)
@@ -117,6 +141,7 @@ def disable_intel_gpu():
 def enable_intel_gpu():
     """Enable the Intel GPU."""
     print("Enabling Intel GPU...")
+    update_grub_for_enabling()  # Update GRUB to ensure Intel GPU is enabled
     command = "echo 1 > /sys/bus/pci/rescan"
     execute_command(command)
     print("Intel GPU enabled.")
@@ -219,7 +244,7 @@ def main():
 
     if is_first_run():
         print("First-time setup detected.")
-        update_grub()
+        update_grub_for_blacklisting()
         create_systemd_service()
     
     if action == "disable":
