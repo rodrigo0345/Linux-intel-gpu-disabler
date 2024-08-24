@@ -5,14 +5,26 @@ import sys
 import os
 
 def execute_command(command):
-    """Execute a shell command and print the output."""
+    """Execute a shell command and return the output."""
     try:
         result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        return result.stdout.decode()
+        return result.stdout.decode().strip()
     except subprocess.CalledProcessError as e:
         print(f"Error executing command: {e}")
         print(e.stderr.decode())
         return ""
+
+def backup_grub():
+    """Backup the GRUB configuration file before modifying."""
+    print("Backing up GRUB configuration...")
+    grub_file = "/etc/default/grub"
+    backup_file = f"{grub_file}.bak"
+    try:
+        execute_command(f"cp {grub_file} {backup_file}")
+        print(f"GRUB configuration backed up to {backup_file}.")
+    except Exception as e:
+        print(f"Failed to backup GRUB file: {e}")
+        sys.exit(1)
 
 def update_grub():
     """Update GRUB configuration to blacklist the Intel GPU driver."""
@@ -21,13 +33,18 @@ def update_grub():
     grub_update_cmd = "grub2-mkconfig -o /boot/grub2/grub.cfg"
     grub_update_uefi_cmd = "grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg"
 
-    # Backup existing GRUB file
-    backup_file = f"{grub_file}.bak"
-    execute_command(f"cp {grub_file} {backup_file}")
+    # Backup GRUB before making changes
+    backup_grub()
 
-    # Append parameters to GRUB configuration
-    with open(grub_file, 'a') as file:
-        file.write('\nGRUB_CMDLINE_LINUX="rd.driver.blacklist=i915 modprobe.blacklist=i915 nvidia-drm.modeset=1"\n')
+    # Update GRUB configuration
+    with open(grub_file, 'r') as file:
+        lines = file.readlines()
+
+    with open(grub_file, 'w') as file:
+        for line in lines:
+            if line.startswith('GRUB_CMDLINE_LINUX'):
+                line = line.rstrip() + ' rd.driver.blacklist=i915 modprobe.blacklist=i915 nvidia-drm.modeset=1\n'
+            file.write(line)
 
     execute_command(grub_update_cmd)
     execute_command(grub_update_uefi_cmd)
@@ -49,20 +66,53 @@ ExecStart=/usr/bin/bash -c 'echo 1 > /sys/bus/pci/devices/0000:00:02.0/remove'
 WantedBy=multi-user.target
 """
 
-    # Create and write to the service file
-    with open(service_file, 'w') as file:
-        file.write(service_content)
+    try:
+        with open(service_file, 'w') as file:
+            file.write(service_content)
+    except Exception as e:
+        print(f"Failed to create systemd service: {e}")
+        return
 
     execute_command("systemctl daemon-reload")
     execute_command("systemctl enable disable-intel-gpu.service")
     print("Systemd service created and enabled. Please reboot for changes to take effect.")
 
+def get_intel_gpu_path():
+    """Find the PCI device path for the Intel GPU."""
+    try:
+        path = execute_command("lspci | grep 'VGA compatible controller: Intel' | awk '{print $1}'")
+        return f"/sys/bus/pci/devices/0000:{path.strip()}/remove"
+    except Exception as e:
+        print(f"Failed to find Intel GPU path: {e}")
+        return None
+
+def is_intel_gpu_enabled():
+    """Check if the Intel GPU is enabled by verifying its presence in lspci output."""
+    try:
+        lspci_output = execute_command("lspci -nn | grep 'VGA compatible controller: Intel'")
+        return "Intel" in lspci_output  # True if Intel GPU is present
+    except Exception as e:
+        print(f"Error checking Intel GPU status: {e}")
+        return False
+
 def disable_intel_gpu():
-    """Disable the Intel GPU."""
+    """Disable the Intel GPU if it's currently enabled."""
     print("Disabling Intel GPU...")
-    command = "echo 1 > /sys/bus/pci/devices/0000:00:02.0/remove"
-    execute_command(command)
-    print("Intel GPU disabled.")
+    if not is_intel_gpu_enabled():
+        print("Intel GPU is already disabled or not present.")
+        return
+
+    intel_gpu_path = get_intel_gpu_path()
+    if intel_gpu_path:
+        print(f"Intel GPU path detected: {intel_gpu_path}")
+        if os.path.exists(intel_gpu_path):
+            command = f"echo 1 > {intel_gpu_path}"
+            execute_command(command)
+            print("Intel GPU disabled.")
+        else:
+            print(f"Path does not exist: {intel_gpu_path}")
+    else:
+        print("Intel GPU path not found. Skipping GPU disable step.")
 
 def enable_intel_gpu():
     """Enable the Intel GPU."""
@@ -72,7 +122,7 @@ def enable_intel_gpu():
     print("Intel GPU enabled.")
 
 def set_power_mode(mode):
-    """Set NVIDIA GPU power mode and system power profile."""
+    """Set GPU power mode and adjust CPU settings for eco, balanced, and performance modes."""
     if mode not in ["eco", "balanced", "performance"]:
         print("Invalid mode. Use 'eco', 'balanced', or 'performance'.")
         return
@@ -80,27 +130,28 @@ def set_power_mode(mode):
     print(f"Setting NVIDIA GPU power mode and system profile to {mode}...")
 
     # Set power profile using `powerprofilesctl`
-    profile_cmd = f"powerprofilesctl set {mode}"
-    try:
-        execute_command(profile_cmd)
-    except subprocess.CalledProcessError:
-        print(f"Failed to set power profile to {mode}. Please ensure `power-profiles-daemon` is running and properly configured.")
-        return
+    set_power_profile(mode)
 
-    # Apply GPU power mode settings
+    # Apply GPU power mode and CPU settings
     try:
         if mode == "eco":
-            execute_command("nvidia-smi --persistence-mode=1")
+            enable_intel_gpu()  # Ensure Intel GPU is enabled
+            execute_command("nvidia-smi --persistence-mode=0")
             execute_command("nvidia-smi --auto-boost-default=0")
+            set_cpu_governor("powersave")
         elif mode == "balanced":
+            enable_intel_gpu()
             execute_command("nvidia-smi --persistence-mode=1")
             execute_command("nvidia-smi --auto-boost-default=1")
+            set_cpu_governor("powersave")
         elif mode == "performance":
+            disable_intel_gpu()  # Use only NVIDIA GPU
             execute_command("nvidia-smi --persistence-mode=1")
             execute_command("nvidia-smi --auto-boost-default=1")
             execute_command("nvidia-settings -a [gpu:0]/GPUPerfModes=1")
+            set_cpu_governor("performance")
     except subprocess.CalledProcessError as e:
-        print(f"Error setting GPU power mode: {e}")
+        print(f"Error setting power mode: {e}")
 
     print(f"NVIDIA GPU power mode and system profile set to {mode}.")
 
@@ -111,27 +162,53 @@ def check_status():
     # Check NVIDIA GPU power mode
     try:
         gpu_persistence_mode = execute_command("nvidia-smi --query-gpu=persistence_mode --format=csv,noheader")
-        gpu_auto_boost = execute_command("nvidia-smi --query-gpu=auto_boost --format=csv,noheader")
+        gpu_power_limit = execute_command("nvidia-smi --query-gpu=power.limit --format=csv,noheader")  # Replace auto_boost
         gpu_perf_mode = execute_command("nvidia-settings -q [gpu:0]/GPUPerfModes")
         print("NVIDIA GPU Status:")
-        print(f"Persistence Mode: {gpu_persistence_mode.strip()}")
-        print(f"Auto Boost: {gpu_auto_boost.strip()}")
-        print(f"Performance Mode: {gpu_perf_mode.strip()}")
+        print(f"Persistence Mode: {gpu_persistence_mode}")
+        print(f"Power Limit: {gpu_power_limit}")
+        print(f"Performance Mode: {gpu_perf_mode}")
     except Exception as e:
         print(f"Failed to retrieve NVIDIA GPU status: {e}")
 
     # Check system power profile
     try:
-        system_profile = execute_command("powerprofilesctl list")
+        system_profile = execute_command("powerprofilesctl get")  # Replace status with get
         print("System Power Profile:")
-        print(system_profile.strip())
+        print(system_profile)
     except subprocess.CalledProcessError as e:
         print(f"Failed to retrieve system power profile: {e}")
+
+def set_power_profile(mode):
+    """Set the system power profile using powerprofilesctl."""
+    try:
+        execute_command(f"powerprofilesctl set {mode}")
+        print(f"System power profile set to {mode}.")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to set power profile to {mode}: {e}")
+        print("Check if power-profiles-daemon is running and configured correctly.")
+
+def set_cpu_governor(governor):
+    """Set the CPU frequency governor."""
+    try:
+        available_governors = execute_command("cat /sys/devices/system/cpu/cpu*/cpufreq/scaling_available_governors")
+        if governor in available_governors:
+            execute_command(f"cpupower frequency-set -g {governor}")
+            print(f"CPU governor set to {governor}.")
+        else:
+            print(f"Governor {governor} not available. Available governors: {available_governors.strip()}")
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to set CPU governor to {governor}: {e}")
+        print("Ensure cpupower is installed and the CPU driver is compatible.")
 
 def is_first_run():
     """Check if the script is being run for the first time."""
     grub_file = "/etc/default/grub"
-    return not os.path.exists(grub_file) or "i915" not in open(grub_file).read()
+    try:
+        return not os.path.exists(grub_file) or "i915" not in open(grub_file).read()
+    except Exception as e:
+        print(f"Error checking first run status: {e}")
+        return False
 
 def main():
     if len(sys.argv) < 2:
@@ -156,6 +233,8 @@ def main():
     else:
         print("Invalid action. Use 'enable', 'disable', 'eco', 'balanced', 'performance', or 'status'.")
         sys.exit(1)
+
+    print("Please REBOOT the system")
 
 if __name__ == "__main__":
     main()
