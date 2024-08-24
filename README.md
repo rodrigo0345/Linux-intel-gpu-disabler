@@ -12,7 +12,7 @@ The script modifies system configurations to disable the Intel GPU entirely by u
 
 ## Setup Instructions
 1. Download the Script
-Save the script to a file named `gpu_control.py` or another name of your choice:
+Save the script to a file named `main.py` or another name of your choice (you can also clone the project):
 
 ```bash
 wget https://example.com/gpu_control.py
@@ -22,7 +22,7 @@ wget https://example.com/gpu_control.py
 
 Open a terminal and run:
 ```bash
-chmod +x gpu_control.py
+chmod +x main.py
 ```
 
 3. Run the Script
@@ -31,12 +31,12 @@ Execute the script with superuser privileges to enable or disable the Intel GPU:
 To Disable the Intel GPU:
 
 ```bash
-sudo ./gpu_control.py disable
+sudo ./main.py disable
 ```
 
 To Enable the Intel GPU:
 ```bash
-sudo ./gpu_control.py enable
+sudo ./main.py enable
 ```
 
 4. Reboot Your System

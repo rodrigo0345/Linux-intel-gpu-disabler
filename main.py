@@ -70,18 +70,51 @@ def enable_intel_gpu():
     execute_command(command)
     print("Intel GPU enabled.")
 
+def set_power_mode(mode):
+    """Set NVIDIA GPU power mode and system power profile."""
+    if mode not in ["eco", "balanced", "performance"]:
+        print("Invalid mode. Use 'eco', 'balanced', or 'performance'.")
+        return
+
+    print(f"Setting NVIDIA GPU power mode and system profile to {mode}...")
+
+    # Set power profile using `powerprofilesctl`
+    profile_cmd = f"powerprofilesctl set {mode}"
+    try:
+        execute_command(profile_cmd)
+    except subprocess.CalledProcessError:
+        print(f"Failed to set power profile to {mode}. Please ensure `power-profiles-daemon` is running and properly configured.")
+        return
+
+    # Apply GPU power mode settings
+    try:
+        if mode == "eco":
+            execute_command("nvidia-smi --persistence-mode=1")
+            execute_command("nvidia-smi --auto-boost-default=0")
+        elif mode == "balanced":
+            execute_command("nvidia-smi --persistence-mode=1")
+            execute_command("nvidia-smi --auto-boost-default=1")
+        elif mode == "performance":
+            execute_command("nvidia-smi --persistence-mode=1")
+            execute_command("nvidia-smi --auto-boost-default=1")
+            execute_command("nvidia-settings -a [gpu:0]/GPUPerfModes=1")
+    except subprocess.CalledProcessError as e:
+        print(f"Error setting GPU power mode: {e}")
+
+    print(f"NVIDIA GPU power mode and system profile set to {mode}.")
+
 def is_first_run():
     """Check if the script is being run for the first time."""
     grub_file = "/etc/default/grub"
     return not os.path.exists(grub_file) or "i915" not in open(grub_file).read()
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: python3 gpu_control.py [enable|disable]")
+    if len(sys.argv) < 2:
+        print("Usage: python3 gpu_control.py [enable|disable|eco|balanced|performance]")
         sys.exit(1)
 
     action = sys.argv[1].lower()
-    
+
     if is_first_run():
         print("First-time setup detected.")
         update_grub()
@@ -91,8 +124,10 @@ def main():
         disable_intel_gpu()
     elif action == "enable":
         enable_intel_gpu()
+    elif action in ["eco", "balanced", "performance"]:
+        set_power_mode(action)
     else:
-        print("Invalid action. Use 'enable' or 'disable'.")
+        print("Invalid action. Use 'enable', 'disable', 'eco', 'balanced', or 'performance'.")
         sys.exit(1)
 
 if __name__ == "__main__":
