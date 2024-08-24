@@ -156,10 +156,18 @@ def disable_intel_gpu():
 def enable_intel_gpu():
     """Enable the Intel GPU."""
     print("Enabling Intel GPU...")
+    disable_systemd_service("disable-intel-gpu.service")
     update_grub_for_enabling()  # Update GRUB to ensure Intel GPU is enabled
     command = "echo 1 > /sys/bus/pci/rescan"
     execute_command(command)
     print("Intel GPU enabled.")
+
+def disable_systemd_service(service_name):
+    """Stop and disable a systemd service."""
+    print(f"Disabling systemd service: {service_name}...")
+    execute_command(f"systemctl stop {service_name}")
+    execute_command(f"systemctl disable {service_name}")
+    print(f"Service {service_name} stopped and disabled.")
 
 def set_power_mode(mode):
     """Set GPU power mode and adjust CPU settings for eco, balanced, and performance modes."""
