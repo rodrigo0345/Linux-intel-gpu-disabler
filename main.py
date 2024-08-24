@@ -18,7 +18,7 @@ def backup_grub():
     """Backup the GRUB configuration file before modifying."""
     print("Backing up GRUB configuration...")
     grub_file = "/etc/default/grub"
-    backup_file = f"{grub_file}.bak"
+    backup_file = f"{grub_file}-backup.bak"
     try:
         execute_command(f"cp {grub_file} {backup_file}")
         print(f"GRUB configuration backed up to {backup_file}.")
@@ -30,9 +30,8 @@ def update_grub_for_blacklisting():
     """Update GRUB configuration to blacklist the Intel GPU driver."""
     print("Updating GRUB configuration to blacklist Intel GPU...")
     grub_file = "/etc/default/grub"
-    grub_update_cmd = "grub2-mkconfig -o /boot/grub2/grub.cfg"
-    grub_update_uefi_cmd = "grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg"
-
+    grub_update_cmd = "/usr/sbin/grub2-mkconfig -o /boot/grub2/grub.cfg"  # Ensure full path is used
+    
     # Backup GRUB before making changes
     backup_grub()
 
@@ -43,19 +42,32 @@ def update_grub_for_blacklisting():
     with open(grub_file, 'w') as file:
         for line in lines:
             if line.startswith('GRUB_CMDLINE_LINUX'):
-                line = line.rstrip() + ' rd.driver.blacklist=i915 modprobe.blacklist=i915 nvidia-drm.modeset=1\n'
+                # Remove any trailing spaces and single quotes at the end of the line
+                line = line.strip()
+                
+                # Find the position of the last single quote in the line
+                last_quote_index = line.rfind("'")
+                
+                # If the blacklist options are not already present, insert them before the last single quote
+                if "modprobe.blacklist=i915" not in line:
+                    # Insert the blacklist options before the closing quote
+                    line = line[:last_quote_index] + " modprobe.blacklist=i915 nvidia-drm.modeset=1" + line[last_quote_index:]
+                
+                # Ensure the line ends with a newline character
+                line = line + "\n"
+
             file.write(line)
 
+    # Execute GRUB update command
     execute_command(grub_update_cmd)
-    execute_command(grub_update_uefi_cmd)
     print("GRUB configuration updated. Please reboot for changes to take effect.")
 
 def update_grub_for_enabling():
     """Update GRUB configuration to remove Intel GPU blacklist."""
     print("Updating GRUB configuration to enable Intel GPU...")
     grub_file = "/etc/default/grub"
-    grub_update_cmd = "grub2-mkconfig -o /boot/grub2/grub.cfg"
-    grub_update_uefi_cmd = "grub2-mkconfig -o /boot/efi/EFI/fedora/grub.cfg"
+    grub_update_cmd = "sudo /usr/sbin/grub2-mkconfig -o /boot/grub2/grub.cfg"
+    rescan_devices = "echo 1 | sudo tee /sys/bus/pci/rescan"
 
     # Backup GRUB before making changes
     backup_grub()
@@ -67,11 +79,14 @@ def update_grub_for_enabling():
     with open(grub_file, 'w') as file:
         for line in lines:
             if line.startswith('GRUB_CMDLINE_LINUX'):
-                line = line.rstrip().replace('rd.driver.blacklist=i915 modprobe.blacklist=i915 nvidia-drm.modeset=1', '')
+                # Remove the blacklisting entries
+                line = line.replace(" modprobe.blacklist=i915 nvidia-drm.modeset=1", "").strip()  # Remove the entries and strip extra whitespace
+                line = line + "\n"
             file.write(line)
 
+
     execute_command(grub_update_cmd)
-    execute_command(grub_update_uefi_cmd)
+    execute_command(rescan_devices)
     print("GRUB configuration updated. Please reboot for changes to take effect.")
 
 def create_systemd_service():
@@ -187,7 +202,7 @@ def check_status():
     # Check NVIDIA GPU power mode
     try:
         gpu_persistence_mode = execute_command("nvidia-smi --query-gpu=persistence_mode --format=csv,noheader")
-        gpu_power_limit = execute_command("nvidia-smi --query-gpu=power.limit --format=csv,noheader")  # Replace auto_boost
+        gpu_power_limit = execute_command("nvidia-smi --query-gpu=power.limit --format=csv,noheader")
         gpu_perf_mode = execute_command("nvidia-settings -q [gpu:0]/GPUPerfModes")
         print("NVIDIA GPU Status:")
         print(f"Persistence Mode: {gpu_persistence_mode}")
@@ -198,7 +213,7 @@ def check_status():
 
     # Check system power profile
     try:
-        system_profile = execute_command("powerprofilesctl get")  # Replace status with get
+        system_profile = execute_command("powerprofilesctl get")
         print("System Power Profile:")
         print(system_profile)
     except subprocess.CalledProcessError as e:
