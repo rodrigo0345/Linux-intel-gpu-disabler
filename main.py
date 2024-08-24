@@ -8,10 +8,11 @@ def execute_command(command):
     """Execute a shell command and print the output."""
     try:
         result = subprocess.run(command, shell=True, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        print(result.stdout.decode())
+        return result.stdout.decode()
     except subprocess.CalledProcessError as e:
         print(f"Error executing command: {e}")
         print(e.stderr.decode())
+        return ""
 
 def update_grub():
     """Update GRUB configuration to blacklist the Intel GPU driver."""
@@ -103,6 +104,30 @@ def set_power_mode(mode):
 
     print(f"NVIDIA GPU power mode and system profile set to {mode}.")
 
+def check_status():
+    """Check and display the current power modes."""
+    print("Checking current power modes...")
+
+    # Check NVIDIA GPU power mode
+    try:
+        gpu_persistence_mode = execute_command("nvidia-smi --query-gpu=persistence_mode --format=csv,noheader")
+        gpu_auto_boost = execute_command("nvidia-smi --query-gpu=auto_boost --format=csv,noheader")
+        gpu_perf_mode = execute_command("nvidia-settings -q [gpu:0]/GPUPerfModes")
+        print("NVIDIA GPU Status:")
+        print(f"Persistence Mode: {gpu_persistence_mode.strip()}")
+        print(f"Auto Boost: {gpu_auto_boost.strip()}")
+        print(f"Performance Mode: {gpu_perf_mode.strip()}")
+    except Exception as e:
+        print(f"Failed to retrieve NVIDIA GPU status: {e}")
+
+    # Check system power profile
+    try:
+        system_profile = execute_command("powerprofilesctl list")
+        print("System Power Profile:")
+        print(system_profile.strip())
+    except subprocess.CalledProcessError as e:
+        print(f"Failed to retrieve system power profile: {e}")
+
 def is_first_run():
     """Check if the script is being run for the first time."""
     grub_file = "/etc/default/grub"
@@ -110,7 +135,7 @@ def is_first_run():
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python3 gpu_control.py [enable|disable|eco|balanced|performance]")
+        print("Usage: python3 gpu_control.py [enable|disable|eco|balanced|performance|status]")
         sys.exit(1)
 
     action = sys.argv[1].lower()
@@ -126,8 +151,10 @@ def main():
         enable_intel_gpu()
     elif action in ["eco", "balanced", "performance"]:
         set_power_mode(action)
+    elif action == "status":
+        check_status()
     else:
-        print("Invalid action. Use 'enable', 'disable', 'eco', 'balanced', or 'performance'.")
+        print("Invalid action. Use 'enable', 'disable', 'eco', 'balanced', 'performance', or 'status'.")
         sys.exit(1)
 
 if __name__ == "__main__":
